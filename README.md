@@ -82,6 +82,31 @@ docker run --rm -p 8080:8080 \
   metrics-generator:latest
 ```
 
+## Автосборка образа (GitHub Actions)
+
+`.github/workflows/build-image.yml` собирает образ при push в `main`/`master` и
+пушит его в GitHub Container Registry (логин автоматический, через
+`GITHUB_TOKEN`). Сборка мультиархитектурная — `linux/amd64` и `linux/arm64`.
+
+Образ лежит по адресу:
+
+```
+ghcr.io/<ваш-аккаунт>/<название-репозитория>:main   # последняя сборка
+ghcr.io/<ваш-аккаунт>/<название-репозитория>:sha-<sha>  # по коммиту
+```
+
+Скачать и запустить:
+
+```sh
+docker pull ghcr.io/<ваш-аккаунт>/<название-репозитория>:main
+docker run --rm -p 8080:8080 \
+  -e PUSHGATEWAY_URL=http://pushgateway.example:9091 \
+  ghcr.io/<ваш-аккаунт>/<название-репозитория>:main
+```
+
+> Для локального pull в первый раз выполните `docker login ghcr.io`
+> (для публичного пакета можно без логина).
+
 ## Полный стек для проверки (docker compose)
 
 Поднимает приложение, Pushgateway, nginx с проверкой Bearer-токена (имитация
