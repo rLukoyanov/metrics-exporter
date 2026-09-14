@@ -1,0 +1,42 @@
+services:
+  pushgateway:
+    image: prom/pushgateway:v1.11.1
+    restart: unless-stopped
+
+  # Authenticating proxy in front of Pushgateway: requires the service
+  # account bearer token, mimicking kube-rbac-proxy in Kubernetes.
+  auth-proxy:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "9091:9091"
+    depends_on:
+      - pushgateway
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - pushgateway
+
+  app:
+    build: .
+    environment:
+      LISTEN_ADDR: ":8080"
+      SEND_MODE: "pushgateway"
+      PUSHGATEWAY_URL: "http://auth-proxy:9091"
+      REMOTE_WRITE_URL: "http://prometheus:9090"
+      SA_TOKEN_PATH: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    volumes:
+      - ./docker/token:/var/run/secrets/kubernetes.io/serviceaccount/token:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - auth-proxy

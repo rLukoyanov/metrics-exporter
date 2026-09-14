@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics-generator
+  namespace: default
+  labels:
+    app: metrics-generator
+spec:
+  selector:
+    app: metrics-generator
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

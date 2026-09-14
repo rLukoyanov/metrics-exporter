@@ -1,0 +1,9 @@
+.git
+.gitignore
+README.md
+Dockerfile
+.dockerignore
+deploy
+web/node_modules
+web/dist
+metrics-generator

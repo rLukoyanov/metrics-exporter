@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics-generator
+  namespace: default
+  labels:
+    app: metrics-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metrics-generator
+  template:
+    metadata:
+      labels:
+        app: metrics-generator
+    spec:
+      serviceAccountName: metrics-generator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: metrics-generator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: LISTEN_ADDR
+              value: ":8080"
+            # URL of the pushgateway (or an authenticating proxy in front of it).
+            - name: PUSHGATEWAY_URL
+              value: "http://pushgateway.observability.svc.cluster.local:9091"
+            # Base URL of Prometheus for the /api/v1/write transport (empty = disabled).
+            # Requires --web.enable-remote-write-receiver on Prometheus.
+            - name: REMOTE_WRITE_URL
+              value: ""
+            # Default transport: pushgateway | remotewrite
+            - name: SEND_MODE
+              value: "pushgateway"
+            # Projected service account token, mounted by Kubernetes.
+            - name: SA_TOKEN_PATH
+              value: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
