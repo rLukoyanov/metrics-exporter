@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
 
   const TYPES = ['gauge', 'counter', 'histogram', 'summary']
   const MODES = [
@@ -25,6 +25,15 @@
 
   let busy = $state(false)
   let status = $state({ kind: '', message: '' })
+
+  let repeat = $state(false)
+  let intervalSec = $state(10)
+  let durationSec = $state('')
+  let running = $state(false)
+  let sentCount = $state(0)
+  let payload = null
+  let timerId = null
+  let stopAt = 0
 
   onMount(async () => {
     try {
@@ -91,37 +100,94 @@
     return metric
   }
 
+  function buildPayload() {
+    return {
+      mode,
+      job: job.trim(),
+      groupingLabels: cleanLabels(groupingLabels),
+      metrics: [buildMetric()]
+    }
+  }
+
+  async function pushOnce() {
+    try {
+      const res = await fetch('/api/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const data = await res.json().catch(() => ({}))
+      return res.ok
+        ? { ok: true, message: data.message || 'Метрика отправлена' }
+        : { ok: false, message: data.message || `Ошибка ${res.status}` }
+    } catch (e) {
+      return { ok: false, message: String(e) }
+    }
+  }
+
   async function submit() {
     status = { kind: '', message: '' }
     if (!metricName.trim()) {
       status = { kind: 'err', message: 'Укажите имя метрики' }
       return
     }
-
-    busy = true
-    try {
-      const res = await fetch('/api/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode,
-          job: job.trim(),
-          groupingLabels: cleanLabels(groupingLabels),
-          metrics: [buildMetric()]
-        })
-      })
-      const data = await res.json().catch(() => ({}))
-      if (res.ok) {
-        status = { kind: 'ok', message: data.message || 'Метрика отправлена' }
-      } else {
-        status = { kind: 'err', message: data.message || `Ошибка ${res.status}` }
-      }
-    } catch (e) {
-      status = { kind: 'err', message: String(e) }
-    } finally {
-      busy = false
+    if (repeat) {
+      startLoop()
+      return
     }
+
+    payload = buildPayload()
+    busy = true
+    const res = await pushOnce()
+    busy = false
+    status = res.ok ? { kind: 'ok', message: res.message } : { kind: 'err', message: res.message }
   }
+
+  async function tick() {
+    if (!running) return
+    const res = await pushOnce()
+    if (!running) return
+    sentCount++
+    const iv = Math.max(1, Math.trunc(num(intervalSec)))
+    if (!res.ok) {
+      status = { kind: 'err', message: `${res.message} (отправлено: ${sentCount})` }
+    } else if (stopAt) {
+      const remain = Math.max(0, Math.round((stopAt - Date.now()) / 1000))
+      status = { kind: 'ok', message: `Отправлено: ${sentCount}, осталось ~${remain}с` }
+    } else {
+      status = { kind: 'ok', message: `Отправлено: ${sentCount}, следующая через ${iv}с` }
+    }
+
+    if (stopAt && Date.now() >= stopAt) {
+      stopLoop(false)
+      status = { kind: 'ok', message: `Готово: ${sentCount} отправок` }
+      return
+    }
+    timerId = setTimeout(tick, iv * 1000)
+  }
+
+  function startLoop() {
+    payload = buildPayload()
+    running = true
+    sentCount = 0
+    const dur = num(durationSec)
+    stopAt = dur > 0 ? Date.now() + dur * 1000 : 0
+    status = { kind: 'ok', message: stopAt ? `Цикл запущен до ${new Date(stopAt).toLocaleTimeString()}` : 'Цикл запущен (бесконечно)' }
+    tick()
+  }
+
+  function stopLoop(manual = true) {
+    running = false
+    if (timerId) {
+      clearTimeout(timerId)
+      timerId = null
+    }
+    if (manual) status = { kind: 'ok', message: `Остановлено, отправок: ${sentCount}` }
+  }
+
+  onDestroy(() => {
+    if (timerId) clearTimeout(timerId)
+  })
 </script>
 
 <header>
@@ -151,6 +217,23 @@
       {/each}
     </select>
   </label>
+
+  <label class="check">
+    <input type="checkbox" bind:checked={repeat} />
+    <span>Писать периодически (loop)</span>
+  </label>
+  {#if repeat}
+    <div class="grid">
+      <label class="field">
+        <span>Интервал (сек)</span>
+        <input bind:value={intervalSec} type="number" step="1" min="1" />
+      </label>
+      <label class="field">
+        <span>Продолжительность (сек, пусто = бесконечно)</span>
+        <input bind:value={durationSec} type="number" step="1" min="1" placeholder="∞" />
+      </label>
+    </div>
+  {/if}
 
   <h2 class="sub">Job</h2>
   <label class="field">
@@ -260,9 +343,13 @@
 </section>
 
 <div class="actions">
-  <button class="primary" onclick={submit} disabled={busy}>
-    {busy ? 'Отправка…' : 'Отправить в Pushgateway'}
-  </button>
+  {#if running}
+    <button class="primary danger" onclick={() => stopLoop()}>Стоп</button>
+  {:else}
+    <button class="primary" onclick={submit} disabled={busy}>
+      {busy ? 'Отправка…' : repeat ? 'Запустить цикл' : 'Отправить'}
+    </button>
+  {/if}
   {#if status.kind}
     <span class="status" class:ok={status.kind === 'ok'} class:err={status.kind === 'err'}>
       {status.message}
@@ -375,6 +462,20 @@
     margin: 0 0 8px;
   }
 
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .check input {
+    width: auto;
+    accent-color: var(--accent);
+  }
+
   button {
     cursor: pointer;
     font-family: inherit;
@@ -417,6 +518,15 @@
   .primary:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .primary.danger {
+    background: var(--err);
+    border-color: var(--err);
+  }
+
+  .primary.danger:hover:not(:disabled) {
+    background: #ff7373;
   }
 
   .status.ok {
